@@ -1,22 +1,22 @@
 {
     "provider_id": {
-        "description": "【推荐】选择生图API提供商",
+        "description": "【推荐】选择生图API提供商（已包含模型）",
         "type": "string",
-        "hint": "从 AstrBot 已配置的提供商中选择一个用于生图的API。选择后将自动使用该提供商的 API URL 和 API Key。如未选择，则使用下方的手动配置。",
+        "hint": "从 AstrBot 已配置的提供商中选择。选择后将自动使用该提供商的 API URL、API Key 和模型。格式为 '来源/配置名/模型名'。如未选择，则使用下方的手动配置。",
         "default": "",
         "_special": "select_provider"
-    },
-    "model": {
-        "description": "【必填】生图模型名称",
-        "type": "string",
-        "hint": "指定用于生图的模型名称。例如: google/gemini-2.0-flash-exp:free, Qwen/Qwen2.5-VL-72B-Instruct:free",
-        "default": "google/gemini-2.0-flash-exp:free"
     },
     "api_url": {
         "description": "【手动配置】API的URL地址",
         "type": "string",
         "hint": "仅当未选择上方提供商时使用。可填写完整接口地址或基础域名，插件会自动拼接 /v1/chat/completions。",
         "default": ""
+    },
+    "model": {
+        "description": "【手动配置】生图模型名称",
+        "type": "string",
+        "hint": "仅当未选择上方提供商时使用。指定用于生图的模型名称。例如: google/gemini-2.0-flash-exp:free",
+        "default": "google/gemini-2.0-flash-exp:free"
     },
     "api_keys": {
         "description": "【手动配置】API 密钥列表",

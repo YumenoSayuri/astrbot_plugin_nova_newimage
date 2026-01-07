@@ -808,58 +808,66 @@ class FigurineProPlugin(Star):
     async def _call_api(self, image_bytes_list: List[bytes], prompt: str) -> bytes | str:
         """调用 API 生成图像，优先使用选择的供应商，否则使用手动配置"""
         
-        # 获取模型名称（必填）
-        model_name = self.conf.get("model", "").strip()
-        if not model_name:
-            return "❌ 模型名称 (model) 未配置"
-        
-        # 确定 API URL 和 Key
+        # 确定 API URL、Key 和 模型
         api_url: str = ""
         api_key: str = ""
+        model_name: str = ""
         
         # 优先使用供应商配置
         if self.provider_id and self.provider:
-            # 从供应商获取配置
+            # 从供应商的 provider_config 获取配置
             try:
-                provider_config = self.provider.get_config() if hasattr(self.provider, 'get_config') else {}
-                api_url = getattr(self.provider, 'api_base', '') or provider_config.get('api_base', '') or provider_config.get('base_url', '')
-                api_key = getattr(self.provider, 'api_key', '') or provider_config.get('api_key', '') or provider_config.get('key', '')
+                config = self.provider.provider_config
+                api_url = config.get("api_base", "")
                 
-                # 尝试从不同属性获取
-                if not api_url:
-                    for attr in ['base_url', 'api_url', 'endpoint']:
-                        if hasattr(self.provider, attr):
-                            api_url = getattr(self.provider, attr, '')
-                            if api_url:
-                                break
+                # 获取 key（是列表）
+                keys = self.provider.get_keys()
+                if keys:
+                    api_key = keys[0]  # 使用第一个key
                 
-                if not api_key:
-                    for attr in ['key', 'secret_key', 'token']:
-                        if hasattr(self.provider, attr):
-                            api_key = getattr(self.provider, attr, '')
-                            if api_key:
-                                break
+                # 获取模型名
+                model_name = self.provider.get_model()
                 
                 if api_url:
-                    logger.debug(f"使用提供商 '{self.provider_id}' 的 API: {api_url[:50]}...")
+                    logger.info(f"[NewImage] 使用提供商 '{self.provider_id}'")
+                    logger.debug(f"  API URL: {api_url[:50]}...")
+                    logger.debug(f"  Model: {model_name}")
             except Exception as e:
                 logger.warning(f"从提供商获取配置失败: {e}，将尝试使用手动配置")
+                api_url = ""
+                api_key = ""
+                model_name = ""
         
         # 如果供应商没有提供有效配置，使用手动配置
         if not api_url:
             api_url_raw = (self.conf.get("api_url") or "").strip()
             if not api_url_raw:
-                return "❌ 未选择提供商，且未配置 API URL"
+                return "❌ 未选择提供商，且未配置手动 API URL"
             api_url = api_url_raw
+            logger.info(f"[NewImage] 使用手动配置 API URL")
         
         if not api_key:
             api_key = await self._get_api_key()
             if not api_key:
-                return "❌ 未选择提供商，且未配置 API Key"
+                return "❌ 未选择提供商，且未配置手动 API Key"
         
-        # 处理 API URL 格式
-        if not re.search(r"/v\d+/(chat|images)/", api_url):
-            api_url = api_url.rstrip("/") + "/v1/chat/completions"
+        if not model_name:
+            model_name = self.conf.get("model", "").strip()
+            if not model_name:
+                return "❌ 未选择提供商，且未配置手动模型名称"
+        
+        # 处理 API URL 格式 - 更智能地处理各种情况
+        api_url = api_url.rstrip("/")
+        if re.search(r"/v\d+/(chat|images)/", api_url):
+            # 已经是完整路径，如 /v1/chat/completions，不做处理
+            pass
+        elif re.search(r"/v\d+$", api_url):
+            # 以 /v1 结尾，只需拼接 /chat/completions
+            api_url = api_url + "/chat/completions"
+            logger.debug(f"检测到 /v1 结尾，拼接为: {api_url}")
+        else:
+            # 基础域名，拼接完整路径
+            api_url = api_url + "/v1/chat/completions"
             logger.debug(f"自动拼接完整 API 路径: {api_url}")
         
         headers = {
@@ -907,7 +915,7 @@ class FigurineProPlugin(Star):
             "temperature": 0.7,
         }
 
-        source_info = f"提供商:{self.provider_id}" if (self.provider_id and self.provider) else "手动配置"
+        source_info = f"提供商:{self.provider_id}" if (self.provider_id and self.provider and api_url) else "手动配置"
         logger.info(f"[NewImage] 发送请求 [{source_info}]: Model={model_name}, HasImage={bool(image_bytes_list)}")
 
         try:
