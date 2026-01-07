@@ -1,20 +1,27 @@
 {
-    "api_url": {
-        "description": "【通用】API的URL地址",
+    "provider_id": {
+        "description": "【推荐】选择生图API提供商",
         "type": "string",
-        "hint": "可填写完整接口地址（如 https://openrouter.ai/api/v1/chat/completions）或基础域名（如 https://openrouter.ai），插件会自动拼接 /v1/chat/completions。",
-        "default": "https://openrouter.ai/api/v1/chat/completions"
+        "hint": "从 AstrBot 已配置的提供商中选择一个用于生图的API。选择后将自动使用该提供商的 API URL 和 API Key。如未选择，则使用下方的手动配置。",
+        "default": "",
+        "_special": "select_provider"
     },
     "model": {
-        "description": "【通用】默认模型名称",
+        "description": "【必填】生图模型名称",
         "type": "string",
-        "hint": "图生图和文生图功能均使用此模型。例如: Qwen/Qwen-Image-Edit-2509, Kwai-Kolors/Kolors",
-        "default": "Qwen/Qwen-Image-Edit-2509"
+        "hint": "指定用于生图的模型名称。例如: google/gemini-2.0-flash-exp:free, Qwen/Qwen2.5-VL-72B-Instruct:free",
+        "default": "google/gemini-2.0-flash-exp:free"
+    },
+    "api_url": {
+        "description": "【手动配置】API的URL地址",
+        "type": "string",
+        "hint": "仅当未选择上方提供商时使用。可填写完整接口地址或基础域名，插件会自动拼接 /v1/chat/completions。",
+        "default": ""
     },
     "api_keys": {
-        "description": "API 密钥列表",
+        "description": "【手动配置】API 密钥列表",
         "type": "list",
-        "hint": "可以填写多个密钥，插件会自动轮换使用。使用 #生图添加key 命令进行管理。",
+        "hint": "仅当未选择上方提供商时使用。可以填写多个密钥，插件会自动轮换使用。",
         "items": {
             "type": "string",
             "description": "API 密钥"

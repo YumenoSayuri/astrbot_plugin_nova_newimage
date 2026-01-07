@@ -18,6 +18,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core import AstrBotConfig
 from astrbot.core.message.components import At, Image, Reply, Plain
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
+from astrbot.core.provider import Provider
 
 
 @register(
@@ -158,6 +159,9 @@ class FigurineProPlugin(Star):
         self.group_task_counts: Dict[str, int] = {}
         self.queue_lock = asyncio.Lock()
         self.group_task_limit: int = 0
+        # 供应商相关
+        self.provider_id: str = ""
+        self.provider: Optional[Provider] = None
 
     async def initialize(self):
         use_proxy = self.conf.get("use_proxy", False)
@@ -172,11 +176,21 @@ class FigurineProPlugin(Star):
             self.group_task_limit = max(0, int(limit_raw))
         except (TypeError, ValueError):
             self.group_task_limit = 0
-            logger.warning(f"FigurinePro: group_task_limit 配置无效 ({limit_raw})，已按 0 处理")
+            logger.warning(f"NewImage: group_task_limit 配置无效 ({limit_raw})，已按 0 处理")
         self.group_task_counts.clear()
-        logger.info("NewImage 插件已加载")
-        if not self.conf.get("api_keys"):
-            logger.warning("FigurinePro: 未配置任何 API 密钥，插件可能无法工作")
+        
+        # 加载供应商配置
+        self.provider_id = self.conf.get("provider_id", "")
+        if self.provider_id:
+            self.provider = self.context.get_provider_by_id(self.provider_id)
+            if self.provider:
+                logger.info(f"NewImage 插件已加载，使用提供商: {self.provider_id}")
+            else:
+                logger.warning(f"NewImage: 未找到提供商 '{self.provider_id}'，将使用手动配置")
+        else:
+            logger.info("NewImage 插件已加载，使用手动API配置")
+            if not self.conf.get("api_keys") and not self.conf.get("api_url"):
+                logger.warning("NewImage: 未配置提供商，也未配置手动API，插件可能无法工作")
 
     async def _load_prompt_map(self):
         logger.info("正在加载 prompts...")
@@ -792,27 +806,68 @@ class FigurineProPlugin(Star):
             return None
 
     async def _call_api(self, image_bytes_list: List[bytes], prompt: str) -> bytes | str:
-        api_url_raw = (self.conf.get("api_url") or "").strip()
-        if not api_url_raw:
-            return "API URL 未配置"
-        if re.search(r"/v\d+/(chat|images)/", api_url_raw):
+        """调用 API 生成图像，优先使用选择的供应商，否则使用手动配置"""
+        
+        # 获取模型名称（必填）
+        model_name = self.conf.get("model", "").strip()
+        if not model_name:
+            return "❌ 模型名称 (model) 未配置"
+        
+        # 确定 API URL 和 Key
+        api_url: str = ""
+        api_key: str = ""
+        
+        # 优先使用供应商配置
+        if self.provider_id and self.provider:
+            # 从供应商获取配置
+            try:
+                provider_config = self.provider.get_config() if hasattr(self.provider, 'get_config') else {}
+                api_url = getattr(self.provider, 'api_base', '') or provider_config.get('api_base', '') or provider_config.get('base_url', '')
+                api_key = getattr(self.provider, 'api_key', '') or provider_config.get('api_key', '') or provider_config.get('key', '')
+                
+                # 尝试从不同属性获取
+                if not api_url:
+                    for attr in ['base_url', 'api_url', 'endpoint']:
+                        if hasattr(self.provider, attr):
+                            api_url = getattr(self.provider, attr, '')
+                            if api_url:
+                                break
+                
+                if not api_key:
+                    for attr in ['key', 'secret_key', 'token']:
+                        if hasattr(self.provider, attr):
+                            api_key = getattr(self.provider, attr, '')
+                            if api_key:
+                                break
+                
+                if api_url:
+                    logger.debug(f"使用提供商 '{self.provider_id}' 的 API: {api_url[:50]}...")
+            except Exception as e:
+                logger.warning(f"从提供商获取配置失败: {e}，将尝试使用手动配置")
+        
+        # 如果供应商没有提供有效配置，使用手动配置
+        if not api_url:
+            api_url_raw = (self.conf.get("api_url") or "").strip()
+            if not api_url_raw:
+                return "❌ 未选择提供商，且未配置 API URL"
             api_url = api_url_raw
-        else:
-            api_url = api_url_raw.rstrip("/") + "/v1/chat/completions"
-            logger.debug(f"检测到基础URL，自动拼接为: {api_url}")
-        api_key = await self._get_api_key()
-        if not api_key: return "无可用的 API Key"
+        
+        if not api_key:
+            api_key = await self._get_api_key()
+            if not api_key:
+                return "❌ 未选择提供商，且未配置 API Key"
+        
+        # 处理 API URL 格式
+        if not re.search(r"/v\d+/(chat|images)/", api_url):
+            api_url = api_url.rstrip("/") + "/v1/chat/completions"
+            logger.debug(f"自动拼接完整 API 路径: {api_url}")
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "HTTP-Referer": "https://github.com/astrbot",
             "X-Title": "AstrBot NewImage Plugin",
         }
-
-        # --- 从配置读取模型名称 ---
-        model_name = self.conf.get("model")  # "model" 是必须的，从配置中读取
-        if not model_name:
-            return "模型名称 (model) 未配置"
 
         message_content: List[Dict[str, Any]] = []
         if prompt:
@@ -852,7 +907,8 @@ class FigurineProPlugin(Star):
             "temperature": 0.7,
         }
 
-        logger.info(f"发送到 OpenAI 风格 API: URL={api_url}, Model={model_name}, HasImage={bool(image_bytes_list)}")
+        source_info = f"提供商:{self.provider_id}" if (self.provider_id and self.provider) else "手动配置"
+        logger.info(f"[NewImage] 发送请求 [{source_info}]: Model={model_name}, HasImage={bool(image_bytes_list)}")
 
         try:
             if not self.iwf: return "ImageWorkflow 未初始化"
