@@ -25,32 +25,58 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.1.0",
+    "1.3.0",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
     class ImageWorkflow:
-        def __init__(self, proxy_url: str | None = None):
+        def __init__(self, proxy_url: str | None = None, timeout: int = 60, retries: int = 3):
             if proxy_url: logger.info(f"ImageWorkflow 使用代理: {proxy_url}")
             self.session = aiohttp.ClientSession()
             self.proxy = proxy_url
+            self.timeout = timeout
+            self.retries = retries
 
-        async def _download_image(self, url: str) -> bytes | None:
+        async def _download_image(self, url: str, timeout: Optional[int] = None, max_retries: Optional[int] = None) -> bytes | None:
+            """
+            下载图片，支持重试机制和更长的超时时间。
+            
+            Args:
+                url: 图片URL
+                timeout: 单次请求超时时间（秒），默认使用构造函数传入的值
+                max_retries: 最大重试次数，默认使用构造函数传入的值
+            """
+            timeout = timeout or self.timeout
+            max_retries = max_retries if max_retries is not None else self.retries
+            
             logger.info(f"正在尝试下载图片: {url}")
-            try:
-                async with self.session.get(url, proxy=self.proxy, timeout=30) as resp:
-                    resp.raise_for_status()
-                    return await resp.read()
-            except aiohttp.ClientResponseError as e:
-                logger.error(f"图片下载失败: HTTP状态码 {e.status}, URL: {url}, 原因: {e.message}")
-                return None
-            except asyncio.TimeoutError:
-                logger.error(f"图片下载失败: 请求超时 (30s), URL: {url}")
-                return None
-            except Exception as e:
-                logger.error(f"图片下载失败: 发生未知错误, URL: {url}, 错误类型: {type(e).__name__}, 错误: {e}",
-                             exc_info=True)
-                return None
+            
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    if attempt > 0:
+                        logger.info(f"第 {attempt + 1} 次重试下载: {url}")
+                        # 重试前等待一小段时间
+                        await asyncio.sleep(1 * attempt)
+                    
+                    async with self.session.get(url, proxy=self.proxy, timeout=timeout) as resp:
+                        resp.raise_for_status()
+                        return await resp.read()
+                except aiohttp.ClientResponseError as e:
+                    last_error = f"HTTP状态码 {e.status}: {e.message}"
+                    logger.warning(f"图片下载失败 (尝试 {attempt + 1}/{max_retries}): {last_error}, URL: {url}")
+                    if e.status in (400, 401, 403, 404):
+                        # 这些错误重试也没用
+                        break
+                except asyncio.TimeoutError:
+                    last_error = f"请求超时 ({timeout}s)"
+                    logger.warning(f"图片下载失败 (尝试 {attempt + 1}/{max_retries}): {last_error}, URL: {url}")
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {e}"
+                    logger.warning(f"图片下载失败 (尝试 {attempt + 1}/{max_retries}): {last_error}, URL: {url}")
+            
+            logger.error(f"图片下载最终失败: {last_error}, URL: {url}")
+            return None
 
         async def _get_avatar(self, user_id: str) -> bytes | None:
             if not user_id.isdigit(): logger.warning(f"无法获取非 QQ 平台或无效 QQ 号 {user_id} 的头像。"); return None
@@ -166,7 +192,12 @@ class FigurineProPlugin(Star):
     async def initialize(self):
         use_proxy = self.conf.get("use_proxy", False)
         proxy_url = self.conf.get("proxy_url") if use_proxy else None
-        self.iwf = self.ImageWorkflow(proxy_url)
+        
+        # 获取下载配置
+        dl_timeout = self.conf.get("download_timeout", 60)
+        dl_retries = self.conf.get("download_retries", 3)
+        
+        self.iwf = self.ImageWorkflow(proxy_url, timeout=dl_timeout, retries=dl_retries)
         await self._load_prompt_map()
         await self._load_user_counts()
         await self._load_group_counts()
@@ -552,8 +583,9 @@ class FigurineProPlugin(Star):
             return
         reward = 0
         if str(self.conf.get("enable_random_checkin", False)).lower() == 'true':
-            max_reward = max(1, int(self.conf.get("checkin_random_reward_max", 5)))
-            reward = random.randint(1, max_reward)
+            min_reward = max(1, int(self.conf.get("checkin_random_reward_min", 1)))
+            max_reward = max(min_reward, int(self.conf.get("checkin_random_reward_max", 5)))
+            reward = random.randint(min_reward, max_reward)
         else:
             reward = int(self.conf.get("checkin_fixed_reward", 3))
         current_count = self._get_user_count(user_id)
@@ -562,7 +594,7 @@ class FigurineProPlugin(Star):
         await self._save_user_counts()
         self.user_checkin_data[user_id] = today_str
         await self._save_user_checkin_data()
-        yield event.plain_result(f"🎉 辉宝赐福成功！获得 {reward} 次，当前剩余: {new_count} 次。")
+        yield event.plain_result(f"🎉 辉宝赐福成功！获得大香蕉生图 {reward} 次，当前生图剩余: {new_count} 次。")
 
     @filter.command("生图增加用户次数", prefix_optional=True)
     async def on_add_user_counts(self, event: AstrMessageEvent):
@@ -694,7 +726,7 @@ class FigurineProPlugin(Star):
                 logger.warning(f"下载 Markdown 图片失败: {e}", exc_info=True)
         return None
 
-    async def _extract_image_bytes_from_response(self, data: Dict[str, Any]) -> bytes | None:
+    async def _extract_image_bytes_from_response(self, data: Dict[str, Any]) -> bytes | str | None:
         """
         从 OpenAI / OpenRouter 风格的响应中提取图像数据。
         兼容多种可能的返回结构，包括：
@@ -702,19 +734,38 @@ class FigurineProPlugin(Star):
             - chat.completions 的 choices[].message.images
             - chat.completions 的 choices[].message.content 内嵌
             - data[].url / data[].b64_json
+        
+        返回值:
+            - bytes: 成功下载的图片数据
+            - str: 如果是以 "FALLBACK_URL:" 开头的字符串，表示下载失败但有可用URL
+            - None: 完全没有找到图像数据
         """
+        found_urls: List[str] = []  # 记录所有发现的URL，用于fallback
+        
+        async def try_download_or_record(url: str) -> bytes | None:
+            """尝试下载URL，如果失败则记录URL用于fallback"""
+            if url.startswith("data:image/"):
+                try:
+                    return base64.b64decode(url.split(",", 1)[1])
+                except Exception:
+                    return None
+            if self.iwf:
+                downloaded = await self.iwf._download_image(url)
+                if downloaded:
+                    return downloaded
+                # 下载失败，记录URL
+                found_urls.append(url)
+            return None
+        
         try:
             # 1. OpenAI Images API 风格 {"data": [{"url": "..."}]} 或 {"data": [{"b64_json": "..."}]}
             if isinstance(data.get("data"), list):
                 for item in data["data"]:
                     if isinstance(item, dict):
                         if url := item.get("url"):
-                            if url.startswith("data:image/"):
-                                return base64.b64decode(url.split(",", 1)[1])
-                            if self.iwf:
-                                downloaded = await self.iwf._download_image(url)
-                                if downloaded:
-                                    return downloaded
+                            result = await try_download_or_record(url)
+                            if result:
+                                return result
                         if b64 := item.get("b64_json"):
                             return base64.b64decode(b64)
 
@@ -725,12 +776,9 @@ class FigurineProPlugin(Star):
                         continue
                     url = image.get("url")
                     if url:
-                        if url.startswith("data:image/"):
-                            return base64.b64decode(url.split(",", 1)[1])
-                        if self.iwf:
-                            downloaded = await self.iwf._download_image(url)
-                            if downloaded:
-                                return downloaded
+                        result = await try_download_or_record(url)
+                        if result:
+                            return result
 
             # 3. Chat Completions 风格
             choices = data.get("choices") or []
@@ -744,12 +792,9 @@ class FigurineProPlugin(Star):
                             continue
                         url = image.get("image_url", {}).get("url") or image.get("url")
                         if url:
-                            if url.startswith("data:image/"):
-                                return base64.b64decode(url.split(",", 1)[1])
-                            if self.iwf:
-                                downloaded = await self.iwf._download_image(url)
-                                if downloaded:
-                                    return downloaded
+                            result = await try_download_or_record(url)
+                            if result:
+                                return result
 
                 content = message.get("content")
 
@@ -764,19 +809,13 @@ class FigurineProPlugin(Star):
                             if isinstance(item.get("image_url"), dict):
                                 url = item["image_url"].get("url")
                                 if url:
-                                    if url.startswith("data:image/"):
-                                        return base64.b64decode(url.split(",", 1)[1])
-                                    if self.iwf:
-                                        downloaded = await self.iwf._download_image(url)
-                                        if downloaded:
-                                            return downloaded
+                                    result = await try_download_or_record(url)
+                                    if result:
+                                        return result
                             if url := item.get("url"):
-                                if url.startswith("data:image/"):
-                                    return base64.b64decode(url.split(",", 1)[1])
-                                if self.iwf:
-                                    downloaded = await self.iwf._download_image(url)
-                                    if downloaded:
-                                        return downloaded
+                                result = await try_download_or_record(url)
+                                if result:
+                                    return result
                             if b64 := item.get("b64_json"):
                                 return base64.b64decode(b64)
 
@@ -790,7 +829,7 @@ class FigurineProPlugin(Star):
                             if markdown_img:
                                 return markdown_img
 
-                # 3.3 content 为字符串，尝试匹配其中的 base64
+                # 3.3 content 为字符串，尝试匹配其中的 base64 或 Markdown 图片
                 if isinstance(content, str):
                     matches = re.findall(r"data:image/([^;]+);base64,([A-Za-z0-9+/=]+)", content)
                     if matches:
@@ -798,11 +837,23 @@ class FigurineProPlugin(Star):
                     markdown_img = await self._extract_image_from_markdown(content)
                     if markdown_img:
                         return markdown_img
+                    # 如果Markdown图片下载失败，尝试提取URL作为fallback
+                    md_match = re.search(r"!\[[^\]]*\]\((https?://[^\s)]+)\)", content)
+                    if md_match:
+                        found_urls.append(md_match.group(1).strip())
 
+            # 如果有发现URL但下载都失败了，返回第一个URL作为fallback
+            if found_urls:
+                logger.warning(f"图片下载失败，但找到了可用URL: {found_urls[0]}")
+                return f"FALLBACK_URL:{found_urls[0]}"
+            
             logger.warning(f"未能在响应中提取图像数据，原始响应(截断): {str(data)[:200]}")
             return None
         except Exception as e:
             logger.error(f"解析图像响应时出现错误: {e}", exc_info=True)
+            # 即使出错，如果之前记录了URL，也返回它
+            if found_urls:
+                return f"FALLBACK_URL:{found_urls[0]}"
             return None
 
     async def _call_api(self, image_bytes_list: List[bytes], prompt: str) -> bytes | str:
@@ -934,10 +985,16 @@ class FigurineProPlugin(Star):
 
                 data = await resp.json()
 
-                image_bytes = await self._extract_image_bytes_from_response(data)
+                result = await self._extract_image_bytes_from_response(data)
 
-                if image_bytes:
-                    return image_bytes
+                if isinstance(result, bytes):
+                    return result
+                
+                # 处理 fallback URL 情况
+                if isinstance(result, str) and result.startswith("FALLBACK_URL:"):
+                    fallback_url = result[len("FALLBACK_URL:"):]
+                    logger.warning(f"图片下载失败，返回备用URL供用户访问: {fallback_url}")
+                    return f"⚠️ 图片已生成但下载失败，请直接访问链接查看:\n{fallback_url}"
 
                 if "error" in data:
                     return data["error"].get("message", json.dumps(data["error"]))

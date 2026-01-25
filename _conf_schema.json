@@ -52,6 +52,18 @@
         "hint": "格式为 http://user:pass@host:port, 例如 http://127.0.0.1:7890",
         "default": ""
     },
+    "download_timeout": {
+        "description": "图片下载超时时间（秒）",
+        "type": "int",
+        "hint": "从 API 获得图片 URL 后尝试下载的超时时间。如果生成的图片 CDN 较慢，建议调大此值。",
+        "default": 60
+    },
+    "download_retries": {
+        "description": "图片下载重试次数",
+        "type": "int",
+        "hint": "当下载失败（如超时或网络波动）时，插件会自动重试的次数。",
+        "default": 3
+    },
     "user_whitelist": {
         "description": "【权限】用户白名单",
         "type": "list",
@@ -107,7 +119,7 @@
     "checkin_fixed_reward": {
         "description": "【签到系统】固定签到奖励次数",
         "type": "int",
-        "hint": "当“随机签到奖励”关闭时，用户每次签到获得的固定次数。",
+        "hint": "当[随机签到奖励]关闭时，用户每次签到获得的固定次数。",
         "default": 3
     },
     "enable_random_checkin": {
@@ -116,10 +128,16 @@
         "hint": "开启后，签到奖励为1到设置的最大值之间的随机数。关闭则使用下方的固定奖励值。",
         "default": false
     },
+    "checkin_random_reward_min": {
+        "description": "【签到系统】随机签到奖励最小值",
+        "type": "int",
+        "hint": "当[随机签到奖励]开启时，用户签到可获得的最低次数。",
+        "default": 1
+    },
     "checkin_random_reward_max": {
         "description": "【签到系统】随机签到奖励最大值",
         "type": "int",
-        "hint": "当“随机签到奖励”开启时，用户签到可获得的最高次数（最低为1）。",
+        "hint": "当[随机签到奖励]开启时，用户签到可获得的最高次数。",
         "default": 5
     },
     "prompt_list": {
