@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.1",
+    "1.3.2",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
@@ -256,7 +256,12 @@ class FigurineProPlugin(Star):
             is_bnn = True
             if not user_prompt: return
         elif cmd in self.prompt_map:
-            user_prompt = self.prompt_map.get(cmd)
+            preset_prompt = self.prompt_map.get(cmd)
+            extra_text = text.removeprefix(cmd).strip()
+            if extra_text:
+                user_prompt = f"{preset_prompt}\n\n[User Additional Instruction]: {extra_text}"
+            else:
+                user_prompt = preset_prompt
         else:
             return
         sender_id = event.get_sender_id()
