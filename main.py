@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.3",
+    "1.3.4",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
@@ -320,14 +320,18 @@ class FigurineProPlugin(Star):
                 initial_messages.append(f"🎨 检测到 {original_count} 张图片，已选取前 {MAX_IMAGES} 张…")
             else:
                 images_to_process = img_bytes_list
-            display_cmd = user_prompt[:10] + '...' if len(user_prompt) > 10 else user_prompt
+            display_cmd = user_prompt[:20] + '...' if len(user_prompt) > 20 else user_prompt
             initial_messages.append(f"🎨 检测到 {len(images_to_process)} 张图片，正在生成 [{display_cmd}]...")
         else:
             if not img_bytes_list:
                 yield event.plain_result("请发送或引用一张图片。");
                 return
             images_to_process = [img_bytes_list[0]]
-            initial_messages.append(f"🎨 收到请求，正在生成 [{cmd}]...")
+            
+            # 处理预设+补充的显示逻辑
+            full_cmd_text = text.strip()
+            display_cmd = full_cmd_text[:30] + '...' if len(full_cmd_text) > 30 else full_cmd_text
+            initial_messages.append(f"🎨 收到请求，正在生成 [{display_cmd}]...")
 
         slot_acquired = False
         try:
