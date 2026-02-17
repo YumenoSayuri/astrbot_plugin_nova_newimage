@@ -242,13 +242,8 @@ class FigurineProPlugin(Star):
         logger.info(f"加载了 {len(self.prompt_map)} 个 prompts。")
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
-    async def on_figurine_request(self, event: AstrMessageEvent, *args, **kwargs):
-        # 兼容性处理：在某些版本的 AstrBot 中，参数顺序可能会发生偏移
-        # 如果第一个参数 event 实际上是插件实例，则尝试从 args 中获取真正的 event
-        if not hasattr(event, "message_str") and args and hasattr(args[0], "message_str"):
-            event = args[0]
-            
-        if self.conf.get("prefix", True) and not getattr(event, "is_at_or_wake_command", False):
+    async def on_figurine_request(self, event: AstrMessageEvent):
+        if self.conf.get("prefix", True) and not event.is_at_or_wake_command:
             return
         text = event.message_str.strip()
         if not text: return
@@ -377,7 +372,7 @@ class FigurineProPlugin(Star):
         event.stop_event()
 
     @filter.command("文生图", prefix_optional=True)
-    async def on_text_to_image_request(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_text_to_image_request(self, event: AstrMessageEvent):
         prompt = event.message_str.strip()
         if not prompt:
             yield event.plain_result("请提供文生图的描述。用法: #文生图 <描述>")
@@ -459,7 +454,7 @@ class FigurineProPlugin(Star):
         event.stop_event()
 
     @filter.command("预设添加", aliases={"lm添加", "lma"}, prefix_optional=True)
-    async def add_lm_prompt(self, event: AstrMessageEvent, *args, **kwargs):
+    async def add_lm_prompt(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         raw = event.message_str.strip()
         if ":" not in raw:
@@ -481,7 +476,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"✅ 已保存生图预设:\n{key}:{new_value}")
 
     @filter.command("生图帮助", aliases={"lm帮助", "lmh"}, prefix_optional=True)
-    async def on_prompt_help(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_prompt_help(self, event: AstrMessageEvent):
         raw_keyword = event.message_str.strip()
 
         # 兼容直接发送"生图帮助"而没有附加参数的情况
@@ -588,7 +583,7 @@ class FigurineProPlugin(Star):
             logger.error(f"保存用户签到文件时发生错误: {e}", exc_info=True)
 
     @filter.regex(r"^[#/!！]?辉宝赐福\s*$")
-    async def on_checkin(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_checkin(self, event: AstrMessageEvent):
         """每日签到获取生图次数 - 支持直接发送"辉宝赐福"触发"""
         if not self.conf.get("enable_checkin", False):
             yield event.plain_result("📅 本机器人未开启辉宝赐福功能。")
@@ -614,7 +609,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"🎉 辉宝赐福成功！获得大香蕉生图 {reward} 次，当前生图剩余: {new_count} 次。")
 
     @filter.command("生图增加用户次数", prefix_optional=True)
-    async def on_add_user_counts(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_add_user_counts(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         cmd_text = event.message_str.strip()
         at_seg = next((s for s in event.message_obj.message if isinstance(s, At)), None)
@@ -636,7 +631,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"✅ 已为用户 {target_qq} 增加 {count} 次，TA当前剩余 {current_count + count} 次。")
 
     @filter.command("生图增加群组次数", prefix_optional=True)
-    async def on_add_group_counts(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_add_group_counts(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         match = re.search(r"(\d+)\s+(\d+)", event.message_str.strip())
         if not match:
@@ -649,7 +644,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"✅ 已为群组 {target_group} 增加 {count} 次，该群当前剩余 {current_count + count} 次。")
 
     @filter.command("生图查询次数", prefix_optional=True)
-    async def on_query_counts(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_query_counts(self, event: AstrMessageEvent):
         user_id_to_query = event.get_sender_id()
         if self.is_global_admin(event):
             at_seg = next((s for s in event.message_obj.message if isinstance(s, At)), None)
@@ -665,7 +660,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(reply_msg)
 
     @filter.command("生图添加key", prefix_optional=True)
-    async def on_add_key(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_add_key(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         new_keys = event.message_str.strip().split()
         if not new_keys: yield event.plain_result("格式错误，请提供要添加的Key。"); return
@@ -676,7 +671,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"✅ 操作完成，新增 {len(added_keys)} 个Key，当前共 {len(api_keys)} 个。")
 
     @filter.command("生图key列表", prefix_optional=True)
-    async def on_list_keys(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_list_keys(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         api_keys = self.conf.get("api_keys", [])
         if not api_keys: yield event.plain_result("📝 暂未配置任何 API Key。"); return
@@ -684,7 +679,7 @@ class FigurineProPlugin(Star):
         yield event.plain_result(f"🔑 API Key 列表:\n{key_list_str}")
 
     @filter.command("生图删除key", prefix_optional=True)
-    async def on_delete_key(self, event: AstrMessageEvent, *args, **kwargs):
+    async def on_delete_key(self, event: AstrMessageEvent):
         if not self.is_global_admin(event): return
         param = event.message_str.strip()
         api_keys = self.conf.get("api_keys", [])
