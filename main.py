@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.0",
+    "1.3.1",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
@@ -185,6 +185,7 @@ class FigurineProPlugin(Star):
         self.group_task_counts: Dict[str, int] = {}
         self.queue_lock = asyncio.Lock()
         self.group_task_limit: int = 0
+        self.api_timeout: int = 120
         # 供应商相关
         self.provider_id: str = ""
         self.provider: Optional[Provider] = None
@@ -202,6 +203,8 @@ class FigurineProPlugin(Star):
         await self._load_user_counts()
         await self._load_group_counts()
         await self._load_user_checkin_data()
+        self.api_timeout = max(10, int(self.conf.get("api_timeout", 120)))
+        logger.info(f"NewImage: API请求超时时间设置为 {self.api_timeout}s")
         limit_raw = self.conf.get("group_task_limit", 2)
         try:
             self.group_task_limit = max(0, int(limit_raw))
@@ -976,7 +979,7 @@ class FigurineProPlugin(Star):
                 json=payload,
                 headers=headers,
                 proxy=self.iwf.proxy,
-                timeout=120,
+                timeout=self.api_timeout,
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()

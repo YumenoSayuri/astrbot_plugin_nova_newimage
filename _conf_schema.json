@@ -64,6 +64,12 @@
         "hint": "当下载失败（如超时或网络波动）时，插件会自动重试的次数。",
         "default": 3
     },
+    "api_timeout": {
+        "description": "API请求等待超时时间（秒）",
+        "type": "int",
+        "hint": "向生图API发送请求后等待返回结果的最大时间。生图模型通常需要较长时间处理，如频繁超时请调大此值。",
+        "default": 120
+    },
     "user_whitelist": {
         "description": "【权限】用户白名单",
         "type": "list",
