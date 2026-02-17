@@ -243,7 +243,12 @@ class FigurineProPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_figurine_request(self, event: AstrMessageEvent, *args, **kwargs):
-        if self.conf.get("prefix", True) and not event.is_at_or_wake_command:
+        # 兼容性处理：在某些版本的 AstrBot 中，参数顺序可能会发生偏移
+        # 如果第一个参数 event 实际上是插件实例，则尝试从 args 中获取真正的 event
+        if not hasattr(event, "message_str") and args and hasattr(args[0], "message_str"):
+            event = args[0]
+            
+        if self.conf.get("prefix", True) and not getattr(event, "is_at_or_wake_command", False):
             return
         text = event.message_str.strip()
         if not text: return
