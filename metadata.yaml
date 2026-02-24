@@ -1,6 +1,6 @@
 name: astrbot_plugin_nova_newimage
 display_name: 全openai兼容画图
 desc: AI生图插件：支持图生图(手办化/Q版化等40+预设)、文生图、自定义Prompt，含用户/群组次数限制与每日签到系统
-version: v1.3.4
+version: v1.3.6
 author: 辉宝
 repo: https://github.com/YumenoSayuri/astrbot_plugin_nova_newimage

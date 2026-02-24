@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.4",
+    "1.3.6",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
@@ -877,29 +877,37 @@ class FigurineProPlugin(Star):
         model_name: str = ""
         
         # 优先使用供应商配置
-        if self.provider_id and self.provider:
-            # 从供应商的 provider_config 获取配置
-            try:
-                config = self.provider.provider_config
-                api_url = config.get("api_base", "")
-                
-                # 获取 key（是列表）
-                keys = self.provider.get_keys()
-                if keys:
-                    api_key = keys[0]  # 使用第一个key
-                
-                # 获取模型名
-                model_name = self.provider.get_model()
-                
-                if api_url:
-                    logger.info(f"[NewImage] 使用提供商 '{self.provider_id}'")
-                    logger.debug(f"  API URL: {api_url[:50]}...")
-                    logger.debug(f"  Model: {model_name}")
-            except Exception as e:
-                logger.warning(f"从提供商获取配置失败: {e}，将尝试使用手动配置")
-                api_url = ""
-                api_key = ""
-                model_name = ""
+        # 每次调用时实时获取，避免两个问题：
+        # 1. 框架启动时插件 initialize() 先于 provider_manager.initialize() 执行，导致首次获取为 None
+        # 2. 供应商被重载后，缓存的引用失效
+        if self.provider_id:
+            self.provider = self.context.get_provider_by_id(self.provider_id)
+            if not self.provider:
+                logger.warning(f"[NewImage] 未找到提供商 '{self.provider_id}'，将尝试手动配置")
+            
+            if self.provider:
+                # 从供应商的 provider_config 获取配置
+                try:
+                    config = self.provider.provider_config
+                    api_url = config.get("api_base", "")
+                    
+                    # 获取 key（是列表）
+                    keys = self.provider.get_keys()
+                    if keys:
+                        api_key = keys[0]  # 使用第一个key
+                    
+                    # 获取模型名
+                    model_name = self.provider.get_model()
+                    
+                    if api_url:
+                        logger.info(f"[NewImage] 使用提供商 '{self.provider_id}'")
+                        logger.debug(f"  API URL: {api_url[:50]}...")
+                        logger.debug(f"  Model: {model_name}")
+                except Exception as e:
+                    logger.warning(f"从提供商获取配置失败: {e}，将尝试使用手动配置")
+                    api_url = ""
+                    api_key = ""
+                    model_name = ""
         
         # 如果供应商没有提供有效配置，使用手动配置
         if not api_url:
@@ -995,7 +1003,32 @@ class FigurineProPlugin(Star):
                     logger.error(f"API 请求失败: HTTP {resp.status}, 响应: {error_text}")
                     return f"API请求失败 (HTTP {resp.status}): {error_text[:200]}"
 
-                data = await resp.json()
+                content_type = resp.headers.get("Content-Type", "")
+                
+                # 处理 SSE 流式响应（如 huan-grok-imagine-1.0）
+                if "text/event-stream" in content_type:
+                    logger.info("[NewImage] 检测到 SSE 流式响应，开始拼接 chunks")
+                    full_content = ""
+                    raw_text = await resp.text()
+                    for line in raw_text.split("\n"):
+                        line = line.strip()
+                        if not line.startswith("data:") or line == "data: [DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(line[5:].strip())
+                            choices = chunk.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content_piece = delta.get("content", "")
+                                if content_piece:
+                                    full_content += content_piece
+                        except Exception:
+                            pass
+                    logger.info(f"[NewImage] SSE 拼接完成，内容长度: {len(full_content)}")
+                    # 构造一个标准结构交给现有解析逻辑
+                    data = {"choices": [{"message": {"content": full_content}}]}
+                else:
+                    data = await resp.json()
 
                 result = await self._extract_image_bytes_from_response(data)
 
