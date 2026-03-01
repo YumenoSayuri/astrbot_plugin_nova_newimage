@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.6",
+    "1.3.7",
     "https://github.com/huibao/astrbot_plugin_newimage",
 )
 class FigurineProPlugin(Star):
@@ -186,6 +186,7 @@ class FigurineProPlugin(Star):
         self.queue_lock = asyncio.Lock()
         self.group_task_limit: int = 0
         self.api_timeout: int = 120
+        self.user_count_cap: int = 0  # 用户持有次数上限，0表示不限制
         # 供应商相关
         self.provider_id: str = ""
         self.provider: Optional[Provider] = None
@@ -205,6 +206,13 @@ class FigurineProPlugin(Star):
         await self._load_user_checkin_data()
         self.api_timeout = max(10, int(self.conf.get("api_timeout", 120)))
         logger.info(f"NewImage: API请求超时时间设置为 {self.api_timeout}s")
+        # 加载用户持有次数上限
+        try:
+            self.user_count_cap = max(0, int(self.conf.get("user_count_cap", 0)))
+        except (TypeError, ValueError):
+            self.user_count_cap = 0
+        if self.user_count_cap > 0:
+            logger.info(f"NewImage: 用户持有次数上限设置为 {self.user_count_cap}")
         limit_raw = self.conf.get("group_task_limit", 2)
         try:
             self.group_task_limit = max(0, int(limit_raw))
@@ -593,6 +601,11 @@ class FigurineProPlugin(Star):
         if self.user_checkin_data.get(user_id) == today_str:
             yield event.plain_result(f"您今天已经领取过辉宝赐福。\n剩余次数: {self._get_user_count(user_id)}")
             return
+        # 检查是否已达到持有上限
+        current_count = self._get_user_count(user_id)
+        if self.user_count_cap > 0 and current_count >= self.user_count_cap:
+            yield event.plain_result(f"📦 您的生图次数已存满（{current_count}/{self.user_count_cap}），无法继续累积。\n请先使用后再来签到哦~")
+            return
         reward = 0
         if str(self.conf.get("enable_random_checkin", False)).lower() == 'true':
             min_reward = max(1, int(self.conf.get("checkin_random_reward_min", 1)))
@@ -600,13 +613,23 @@ class FigurineProPlugin(Star):
             reward = random.randint(min_reward, max_reward)
         else:
             reward = int(self.conf.get("checkin_fixed_reward", 3))
-        current_count = self._get_user_count(user_id)
         new_count = current_count + reward
-        self.user_counts[user_id] = new_count
-        await self._save_user_counts()
-        self.user_checkin_data[user_id] = today_str
-        await self._save_user_checkin_data()
-        yield event.plain_result(f"🎉 辉宝赐福成功！获得大香蕉生图 {reward} 次，当前生图剩余: {new_count} 次。")
+        # 如果设置了上限，截断到上限
+        if self.user_count_cap > 0 and new_count > self.user_count_cap:
+            new_count = self.user_count_cap
+            actual_reward = new_count - current_count
+            self.user_counts[user_id] = new_count
+            await self._save_user_counts()
+            self.user_checkin_data[user_id] = today_str
+            await self._save_user_checkin_data()
+            yield event.plain_result(f"🎉 辉宝赐福成功！获得大香蕉生图 {actual_reward} 次（已达上限 {self.user_count_cap}），当前生图剩余: {new_count} 次。")
+        else:
+            self.user_counts[user_id] = new_count
+            await self._save_user_counts()
+            self.user_checkin_data[user_id] = today_str
+            await self._save_user_checkin_data()
+            cap_info = f"（上限 {self.user_count_cap}）" if self.user_count_cap > 0 else ""
+            yield event.plain_result(f"🎉 辉宝赐福成功！获得大香蕉生图 {reward} 次，当前生图剩余: {new_count}{cap_info} 次。")
 
     @filter.command("生图增加用户次数", prefix_optional=True)
     async def on_add_user_counts(self, event: AstrMessageEvent):
@@ -626,9 +649,14 @@ class FigurineProPlugin(Star):
                 '格式错误:\n#生图增加用户次数 @用户 <次数>\n或 #生图增加用户次数 <QQ号> <次数>')
             return
         current_count = self._get_user_count(target_qq)
-        self.user_counts[str(target_qq)] = current_count + count
+        new_count = current_count + count
+        # 如果设置了上限，截断到上限
+        if self.user_count_cap > 0 and new_count > self.user_count_cap:
+            new_count = self.user_count_cap
+        self.user_counts[str(target_qq)] = new_count
         await self._save_user_counts()
-        yield event.plain_result(f"✅ 已为用户 {target_qq} 增加 {count} 次，TA当前剩余 {current_count + count} 次。")
+        cap_info = f"（上限 {self.user_count_cap}）" if self.user_count_cap > 0 else ""
+        yield event.plain_result(f"✅ 已为用户 {target_qq} 增加次数，TA当前剩余 {new_count}{cap_info} 次。")
 
     @filter.command("生图增加群组次数", prefix_optional=True)
     async def on_add_group_counts(self, event: AstrMessageEvent):
