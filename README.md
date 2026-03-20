@@ -1,8 +1,8 @@
 # 🎨 AstrBot NewImage Plugin
 
-> AI 图像生成插件 - 支持图生图、文生图、40+ 预设风格转换
+> AI 图像生成插件 - 支持 Gemini 原生 API 与 OpenAI 兼容双路由，图生图、文生图、40+ 预设风格转换
 
-一款功能强大的 AstrBot 图像生成插件，支持通过 OpenAI 兼容 API 进行图生图（手办化、Q版化、Cos化等 40+ 预设）和文生图创作。内置用户/群组次数限制系统与每日签到机制，适合社群运营使用。
+一款功能强大的 AstrBot 图像生成插件，支持 **Gemini 原生 API** 和 **OpenAI 兼容 API** 双路由，可进行图生图（手办化、Q版化、Cos化等 40+ 预设）和文生图创作。内置安全过滤、高分辨率白名单、用户/群组次数限制系统与每日签到机制，适合社群运营使用。
 
 ## ✨ 功能特性
 
@@ -17,6 +17,16 @@
 
 ### ✏️ 文生图功能
 - 使用 `/文生图 <描述>` 直接从文字生成图像
+
+### 🔀 API 双路由
+- **Gemini 原生 API**：开启 `is_gemini_api` 开关后，使用 Gemini `generateContent` 格式发送请求，支持所有 Gemini 原生参数（包括自定义域名反代）
+- **OpenAI 兼容 API**：默认模式，使用 `/v1/chat/completions` 格式，兼容 OpenRouter 等各种中转站
+- **一键切换**：通过配置面板的开关按钮即可切换，无需修改任何代码
+
+### 🛡️ Gemini 增强功能（Gemini 模式专属）
+- **安全过滤等级**：可配置 `BLOCK_NONE`（不过滤）、`BLOCK_ONLY_HIGH` 等多种等级，突破默认安全限制
+- **高分辨率生成**：支持 1K/2K/4K 分辨率参数，可设置全局默认值
+- **高分辨率白名单**：只有白名单中的用户才能在指令中输入 `2K`/`4K` 自动提取为分辨率参数；不在白名单的用户输入 `2K`/`4K` 将作为普通文本传入 prompt
 
 ### 🎁 次数管理系统
 - **用户次数限制**：按 QQ 号独立计算使用次数
@@ -71,6 +81,15 @@
 | `api_url` | 字符串 | API 地址，支持 OpenRouter、OpenAI 兼容接口 |
 | `model` | 字符串 | 模型名称，如 `google/gemini-2.0-flash-exp:free` |
 | `api_keys` | 列表 | API 密钥列表，支持多个 Key 轮换 |
+
+### Gemini 模式配置
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `is_gemini_api` | 开关 | `false` | 当前供应商是否为 Gemini 原生接口（包括自定义域名反代） |
+| `safety_level` | 字符串 | 空 | 安全过滤等级。可选：`BLOCK_NONE`、`BLOCK_ONLY_HIGH`、`BLOCK_MEDIUM_AND_ABOVE`、`BLOCK_LOW_AND_ABOVE` |
+| `image_size` | 字符串 | 空 | 全局默认图片分辨率。可选：`1K`、`2K`、`4K` |
+| `hires_whitelist` | 列表 | 空 | 高分辨率白名单（用户QQ号列表），白名单用户可在指令中输入 `2K`/`4K` 覆盖默认值 |
 
 ### 其他配置
 
@@ -164,6 +183,13 @@
 
 
 ## 📝 更新日志
+
+### v1.4.0 (2026-03-21)
+- 🚀 **重大新功能**：新增 **Gemini 原生 API 双路由** 支持！通过 `is_gemini_api` 开关一键切换 Gemini 原生格式（`generateContent`）与 OpenAI 兼容格式（`/v1/chat/completions`）。支持自定义域名反代的 Gemini 接口。
+- 🛡️ **安全过滤**：Gemini 模式下新增 `safety_level` 配置，支持 `BLOCK_NONE`/`BLOCK_ONLY_HIGH`/`BLOCK_MEDIUM_AND_ABOVE`/`BLOCK_LOW_AND_ABOVE` 四种等级，可突破默认安全限制。被拦截时会给出明确提示。
+- 🖼️ **高分辨率生成**：Gemini 模式下新增 `image_size` 全局默认分辨率配置（1K/2K/4K）。
+- 👑 **高分辨率白名单**：新增 `hires_whitelist` 配置，仅白名单中的用户在指令中输入 `2K`/`4K` 会被自动提取为分辨率参数（从 prompt 中移除），非白名单用户的 `2K`/`4K` 文本原样保留在 prompt 中。支持图生图预设补充、bnn 自定义、文生图三种场景。
+- 🔧 **架构优化**：`_call_api` 重构为 `_call_gemini_api` + `_call_openai_api` 双路由架构，代码更清晰、更易维护。
 
 ### v1.3.7 (2026-03-02)
 - ✨ **新功能**：新增「用户持有次数上限」(`user_count_cap`) 配置项。可设定用户最多可持有的次数上限，达到上限后签到将不再增加次数，管理员手动增加也会被截断到上限。设为 0 表示不限制。

@@ -24,9 +24,9 @@ from astrbot.core.provider import Provider
 @register(
     "astrbot_plugin_newimage",
     "辉宝",
-    "AI生图插件：支持图生图(手办化/Q版化等预设)、文生图、自定义Prompt，含次数限制与签到系统",
-    "1.3.7",
-    "https://github.com/huibao/astrbot_plugin_newimage",
+    "AI生图插件：支持Gemini原生API与OpenAI兼容双路由，图生图/文生图/自定义Prompt，含安全过滤、高分辨率白名单与签到系统",
+    "1.4.0",
+    "https://github.com/YumenoSayuri/astrbot_plugin_nova_newimage",
 )
 class FigurineProPlugin(Star):
     class ImageWorkflow:
@@ -190,6 +190,11 @@ class FigurineProPlugin(Star):
         # 供应商相关
         self.provider_id: str = ""
         self.provider: Optional[Provider] = None
+        # Gemini 模式相关
+        self.is_gemini_api: bool = False
+        self.safety_level: str = ""
+        self.default_image_size: str = ""
+        self.hires_whitelist: List[str] = []
 
     async def initialize(self):
         use_proxy = self.conf.get("use_proxy", False)
@@ -220,6 +225,20 @@ class FigurineProPlugin(Star):
             self.group_task_limit = 0
             logger.warning(f"NewImage: group_task_limit 配置无效 ({limit_raw})，已按 0 处理")
         self.group_task_counts.clear()
+        
+        # 加载 Gemini 模式配置
+        self.is_gemini_api = bool(self.conf.get("is_gemini_api", False))
+        self.safety_level = (self.conf.get("safety_level", "") or "").strip()
+        self.default_image_size = (self.conf.get("image_size", "") or "").strip().upper()
+        self.hires_whitelist = [str(x) for x in self.conf.get("hires_whitelist", [])]
+        if self.is_gemini_api:
+            logger.info(f"NewImage: Gemini 原生 API 模式已开启")
+            if self.safety_level:
+                logger.info(f"  安全过滤等级: {self.safety_level}")
+            if self.default_image_size:
+                logger.info(f"  默认图片分辨率: {self.default_image_size}")
+            if self.hires_whitelist:
+                logger.info(f"  高分辨率白名单: {len(self.hires_whitelist)} 人")
         
         # 加载供应商配置
         self.provider_id = self.conf.get("provider_id", "")
@@ -255,25 +274,34 @@ class FigurineProPlugin(Star):
             return
         text = event.message_str.strip()
         if not text: return
+        sender_id = event.get_sender_id()
+        group_id = event.get_group_id()
         cmd = text.split()[0].strip()
         bnn_command = self.conf.get("extra_prefix", "bnn")
         user_prompt = ""
         is_bnn = False
+        extracted_size = None  # 用户指定的分辨率参数
         if cmd == bnn_command:
             user_prompt = text.removeprefix(cmd).strip()
             is_bnn = True
+            if not user_prompt: return
+            # 从 bnn 的自定义 prompt 中提取分辨率（仅白名单用户）
+            user_prompt, extracted_size = self._extract_image_size(user_prompt, sender_id)
             if not user_prompt: return
         elif cmd in self.prompt_map:
             preset_prompt = self.prompt_map.get(cmd)
             extra_text = text.removeprefix(cmd).strip()
             if extra_text:
-                user_prompt = f"{preset_prompt}\n\n[User Additional Instruction]: {extra_text}"
+                # 从用户补充文本中提取分辨率（仅白名单用户）
+                extra_text, extracted_size = self._extract_image_size(extra_text, sender_id)
+                if extra_text:
+                    user_prompt = f"{preset_prompt}\n\n[User Additional Instruction]: {extra_text}"
+                else:
+                    user_prompt = preset_prompt
             else:
                 user_prompt = preset_prompt
         else:
             return
-        sender_id = event.get_sender_id()
-        group_id = event.get_group_id()
         is_master = self.is_global_admin(event)
         if not is_master:
             if sender_id in self.conf.get("user_blacklist", []): return
@@ -355,7 +383,7 @@ class FigurineProPlugin(Star):
                 yield event.plain_result(msg)
 
             start_time = datetime.now()
-            res = await self._call_api(images_to_process, user_prompt)
+            res = await self._call_api(images_to_process, user_prompt, image_size=extracted_size)
             elapsed = (datetime.now() - start_time).total_seconds()
             if isinstance(res, bytes):
                 if not is_master:
@@ -389,6 +417,13 @@ class FigurineProPlugin(Star):
         sender_id = event.get_sender_id()
         group_id = event.get_group_id()
         is_master = self.is_global_admin(event)
+        
+        # 从文生图 prompt 中提取分辨率（仅白名单用户）
+        extracted_size = None
+        prompt, extracted_size = self._extract_image_size(prompt, sender_id)
+        if not prompt:
+            yield event.plain_result("请提供文生图的描述（分辨率参数不能作为唯一输入）。")
+            return
 
         # --- 权限和次数检查 ---
         if not is_master:
@@ -434,7 +469,7 @@ class FigurineProPlugin(Star):
 
             start_time = datetime.now()
             # 调用通用API，但传入空的图片列表
-            res = await self._call_api([], prompt)
+            res = await self._call_api([], prompt, image_size=extracted_size)
             elapsed = (datetime.now() - start_time).total_seconds()
 
             if isinstance(res, bytes):
@@ -729,6 +764,35 @@ class FigurineProPlugin(Star):
             self.key_index = (self.key_index + 1) % len(keys)
             return key
 
+    def _extract_image_size(self, text: str, sender_id: str) -> tuple:
+        """
+        从用户输入中提取分辨率参数（仅白名单用户生效）。
+        
+        返回: (cleaned_text, image_size)
+            - cleaned_text: 移除了分辨率关键词后的文本
+            - image_size: 提取到的分辨率（如 "2K", "4K"）或 None
+        """
+        if not self.is_gemini_api:
+            return text, None
+        
+        # 检查用户是否在高分辨率白名单中
+        if sender_id not in self.hires_whitelist:
+            return text, None
+        
+        # 匹配 2K/4K（不区分大小写，支持独立出现或在开头/结尾）
+        match = re.search(r'\b([24][kK])\b', text)
+        if match:
+            size_str = match.group(1).upper()
+            # 从文本中移除匹配到的分辨率关键词
+            cleaned = text[:match.start()] + text[match.end():]
+            cleaned = cleaned.strip()
+            # 清理多余的空格
+            cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+            logger.info(f"[NewImage] 白名单用户 {sender_id} 提取分辨率参数: {size_str}")
+            return cleaned, size_str
+        
+        return text, None
+
     async def _acquire_group_slot(self, group_id: Optional[str]) -> bool:
         if not group_id or self.group_task_limit <= 0:
             return True
@@ -896,48 +960,34 @@ class FigurineProPlugin(Star):
                 return f"FALLBACK_URL:{found_urls[0]}"
             return None
 
-    async def _call_api(self, image_bytes_list: List[bytes], prompt: str) -> bytes | str:
-        """调用 API 生成图像，优先使用选择的供应商，否则使用手动配置"""
+    async def _call_api(self, image_bytes_list: List[bytes], prompt: str, image_size: Optional[str] = None) -> bytes | str:
+        """调用 API 生成图像，支持 Gemini 原生 API 和 OpenAI 兼容格式双路由"""
         
-        # 确定 API URL、Key 和 模型
+        # ========== 公共：确定 API URL、Key 和 模型 ==========
         api_url: str = ""
         api_key: str = ""
         model_name: str = ""
         
-        # 优先使用供应商配置
-        # 每次调用时实时获取，避免两个问题：
-        # 1. 框架启动时插件 initialize() 先于 provider_manager.initialize() 执行，导致首次获取为 None
-        # 2. 供应商被重载后，缓存的引用失效
         if self.provider_id:
             self.provider = self.context.get_provider_by_id(self.provider_id)
             if not self.provider:
                 logger.warning(f"[NewImage] 未找到提供商 '{self.provider_id}'，将尝试手动配置")
-            
             if self.provider:
-                # 从供应商的 provider_config 获取配置
                 try:
                     config = self.provider.provider_config
                     api_url = config.get("api_base", "")
-                    
-                    # 获取 key（是列表）
                     keys = self.provider.get_keys()
                     if keys:
-                        api_key = keys[0]  # 使用第一个key
-                    
-                    # 获取模型名
+                        api_key = keys[0]
                     model_name = self.provider.get_model()
-                    
                     if api_url:
                         logger.info(f"[NewImage] 使用提供商 '{self.provider_id}'")
                         logger.debug(f"  API URL: {api_url[:50]}...")
                         logger.debug(f"  Model: {model_name}")
                 except Exception as e:
                     logger.warning(f"从提供商获取配置失败: {e}，将尝试使用手动配置")
-                    api_url = ""
-                    api_key = ""
-                    model_name = ""
+                    api_url = api_key = model_name = ""
         
-        # 如果供应商没有提供有效配置，使用手动配置
         if not api_url:
             api_url_raw = (self.conf.get("api_url") or "").strip()
             if not api_url_raw:
@@ -955,19 +1005,143 @@ class FigurineProPlugin(Star):
             if not model_name:
                 return "❌ 未选择提供商，且未配置手动模型名称"
         
-        # 处理 API URL 格式 - 更智能地处理各种情况
+        source_info = f"提供商:{self.provider_id}" if (self.provider_id and self.provider) else "手动配置"
+        
+        # ========== 根据开关选择路由 ==========
+        if self.is_gemini_api:
+            return await self._call_gemini_api(api_url, api_key, model_name, image_bytes_list, prompt, image_size, source_info)
+        else:
+            return await self._call_openai_api(api_url, api_key, model_name, image_bytes_list, prompt, source_info)
+
+    async def _call_gemini_api(self, api_url: str, api_key: str, model_name: str,
+                                image_bytes_list: List[bytes], prompt: str,
+                                image_size: Optional[str], source_info: str) -> bytes | str:
+        """Gemini 原生 API 路径（generateContent）"""
+        
+        # 构建 Gemini 格式的 endpoint
+        api_url = api_url.rstrip("/")
+        version = "v1beta"
+        endpoint_base = api_url if f"/{version}" in api_url else f"{api_url}/{version}"
+        endpoint = f"{endpoint_base}/models/{model_name}:generateContent?key={api_key}"
+        
+        # 构建请求体 parts
+        parts: List[Dict[str, Any]] = []
+        
+        # 添加输入图片
+        for img_bytes in image_bytes_list:
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+            parts.append({
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": img_b64
+                }
+            })
+        
+        # 添加文本提示
+        if prompt:
+            parts.append({"text": prompt})
+        
+        if not parts:
+            return "缺少 prompt 或图片内容"
+        
+        request_body: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"]
+            }
+        }
+        
+        # 确定最终使用的 imageSize：用户指定 > 全局默认
+        final_image_size = image_size or self.default_image_size
+        if final_image_size:
+            image_config: Dict[str, Any] = {"imageSize": final_image_size}
+            request_body["generationConfig"]["imageConfig"] = image_config
+            logger.info(f"[NewImage/Gemini] 使用分辨率: {final_image_size}")
+        
+        # 添加安全过滤设置
+        if self.safety_level:
+            categories = [
+                "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "HARM_CATEGORY_HARASSMENT"
+            ]
+            request_body["safetySettings"] = [
+                {"category": cat, "threshold": self.safety_level} for cat in categories
+            ]
+        
+        logger.info(f"[NewImage/Gemini] 发送请求 [{source_info}]: Model={model_name}, HasImage={bool(image_bytes_list)}")
+        
+        try:
+            if not self.iwf:
+                return "ImageWorkflow 未初始化"
+            async with self.iwf.session.post(
+                endpoint,
+                json=request_body,
+                headers={"Content-Type": "application/json"},
+                proxy=self.iwf.proxy,
+                timeout=self.api_timeout,
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    logger.error(f"Gemini API 请求失败: HTTP {resp.status}, 响应: {error_text}")
+                    return f"Gemini API请求失败 (HTTP {resp.status}): {error_text[:300]}"
+                
+                data = await resp.json()
+                
+                # 解析 Gemini 响应
+                candidates = data.get("candidates", [])
+                for candidate in candidates:
+                    resp_parts = candidate.get("content", {}).get("parts", [])
+                    for part in resp_parts:
+                        # 跳过思考过程
+                        if part.get("thought"):
+                            continue
+                        # 提取内联图片
+                        if "inlineData" in part:
+                            inline = part["inlineData"]
+                            b64_data = inline.get("data", "")
+                            if b64_data:
+                                return base64.b64decode(b64_data)
+                
+                # 检查是否有错误信息
+                if "error" in data:
+                    err = data["error"]
+                    return f"Gemini API 错误: {err.get('message', json.dumps(err))}"
+                
+                # 检查安全过滤
+                if candidates:
+                    finish_reason = candidates[0].get("finishReason", "")
+                    if finish_reason == "SAFETY":
+                        safety_ratings = candidates[0].get("safetyRatings", [])
+                        blocked = [r for r in safety_ratings if r.get("blocked")]
+                        if blocked:
+                            cats = ", ".join(r.get("category", "?") for r in blocked)
+                            return f"⚠️ 内容被安全过滤器拦截: {cats}\n提示：可在配置中调整安全过滤等级。"
+                        return "⚠️ 内容被安全过滤器拦截。提示：可在配置中调整安全过滤等级。"
+                
+                error_msg = f"Gemini 响应中未找到图像数据: {str(data)[:500]}..."
+                logger.error(error_msg)
+                return error_msg
+        except asyncio.TimeoutError:
+            logger.error("Gemini API 请求超时")
+            return "请求超时"
+        except Exception as e:
+            logger.error(f"调用 Gemini API 时发生未知错误: {e}", exc_info=True)
+            return f"发生未知错误: {e}"
+
+    async def _call_openai_api(self, api_url: str, api_key: str, model_name: str,
+                                image_bytes_list: List[bytes], prompt: str, source_info: str) -> bytes | str:
+        """OpenAI 兼容 API 路径（/v1/chat/completions）"""
+        
+        # 处理 API URL 格式
         api_url = api_url.rstrip("/")
         if re.search(r"/v\d+/(chat|images)/", api_url):
-            # 已经是完整路径，如 /v1/chat/completions，不做处理
             pass
         elif re.search(r"/v\d+$", api_url):
-            # 以 /v1 结尾，只需拼接 /chat/completions
             api_url = api_url + "/chat/completions"
-            logger.debug(f"检测到 /v1 结尾，拼接为: {api_url}")
         else:
-            # 基础域名，拼接完整路径
             api_url = api_url + "/v1/chat/completions"
-            logger.debug(f"自动拼接完整 API 路径: {api_url}")
         
         headers = {
             "Content-Type": "application/json",
@@ -982,14 +1156,12 @@ class FigurineProPlugin(Star):
 
         if image_bytes_list:
             try:
-                for idx, img_bytes in enumerate(image_bytes_list):
+                for img_bytes in image_bytes_list:
                     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-                    message_content.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                        }
-                    )
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                    })
             except Exception as e:
                 logger.error(f"Base64 编码图片时出错: {e}", exc_info=True)
                 return f"图片编码失败: {e}"
@@ -1004,27 +1176,19 @@ class FigurineProPlugin(Star):
 
         payload: Dict[str, Any] = {
             "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": user_content,
-                }
-            ],
+            "messages": [{"role": "user", "content": user_content}],
             "max_tokens": 1024,
             "temperature": 0.7,
         }
 
-        source_info = f"提供商:{self.provider_id}" if (self.provider_id and self.provider and api_url) else "手动配置"
-        logger.info(f"[NewImage] 发送请求 [{source_info}]: Model={model_name}, HasImage={bool(image_bytes_list)}")
+        logger.info(f"[NewImage/OAI] 发送请求 [{source_info}]: Model={model_name}, HasImage={bool(image_bytes_list)}")
 
         try:
-            if not self.iwf: return "ImageWorkflow 未初始化"
+            if not self.iwf:
+                return "ImageWorkflow 未初始化"
             async with self.iwf.session.post(
-                api_url,
-                json=payload,
-                headers=headers,
-                proxy=self.iwf.proxy,
-                timeout=self.api_timeout,
+                api_url, json=payload, headers=headers,
+                proxy=self.iwf.proxy, timeout=self.api_timeout,
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -1033,7 +1197,6 @@ class FigurineProPlugin(Star):
 
                 content_type = resp.headers.get("Content-Type", "")
                 
-                # 处理 SSE 流式响应（如 huan-grok-imagine-1.0）
                 if "text/event-stream" in content_type:
                     logger.info("[NewImage] 检测到 SSE 流式响应，开始拼接 chunks")
                     full_content = ""
@@ -1053,7 +1216,6 @@ class FigurineProPlugin(Star):
                         except Exception:
                             pass
                     logger.info(f"[NewImage] SSE 拼接完成，内容长度: {len(full_content)}")
-                    # 构造一个标准结构交给现有解析逻辑
                     data = {"choices": [{"message": {"content": full_content}}]}
                 else:
                     data = await resp.json()
@@ -1063,7 +1225,6 @@ class FigurineProPlugin(Star):
                 if isinstance(result, bytes):
                     return result
                 
-                # 处理 fallback URL 情况
                 if isinstance(result, str) and result.startswith("FALLBACK_URL:"):
                     fallback_url = result[len("FALLBACK_URL:"):]
                     logger.warning(f"图片下载失败，返回备用URL供用户访问: {fallback_url}")
@@ -1076,10 +1237,10 @@ class FigurineProPlugin(Star):
                 logger.error(error_msg)
                 return error_msg
         except asyncio.TimeoutError:
-            logger.error("API 请求超时");
+            logger.error("API 请求超时")
             return "请求超时"
         except Exception as e:
-            logger.error(f"调用 API 时发生未知错误: {e}", exc_info=True);
+            logger.error(f"调用 API 时发生未知错误: {e}", exc_info=True)
             return f"发生未知错误: {e}"
 
     async def terminate(self):
