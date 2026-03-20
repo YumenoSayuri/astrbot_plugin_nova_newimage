@@ -70,6 +70,31 @@
         "hint": "向生图API发送请求后等待返回结果的最大时间。生图模型通常需要较长时间处理，如频繁超时请调大此值。",
         "default": 120
     },
+    "is_gemini_api": {
+        "description": "【API模式】当前供应商是否为 Gemini 原生接口",
+        "type": "bool",
+        "hint": "开启后将使用 Gemini 原生 API 格式（generateContent）发送请求，支持 safetySettings、imageSize 等原生参数。关闭则使用 OpenAI 兼容格式（/v1/chat/completions）。如果你的供应商是 Gemini 原生接口（包括自定义域名反代），请开启此项。",
+        "default": false
+    },
+    "safety_level": {
+        "description": "【Gemini】安全过滤等级",
+        "type": "string",
+        "hint": "Gemini 模式下生效。设置安全内容过滤阈值，留空则不添加。可选值：BLOCK_NONE（不过滤）、BLOCK_ONLY_HIGH（仅过滤高危）、BLOCK_MEDIUM_AND_ABOVE、BLOCK_LOW_AND_ABOVE",
+        "default": ""
+    },
+    "image_size": {
+        "description": "【Gemini】全局默认生成图片分辨率",
+        "type": "string",
+        "hint": "Gemini 模式下生效。设置生成图片的默认分辨率，留空则不添加。可选值：1K、2K、4K。注意：白名单用户可在指令中输入 2K/4K 覆盖此默认值。",
+        "default": ""
+    },
+    "hires_whitelist": {
+        "description": "【Gemini】高分辨率白名单",
+        "type": "list",
+        "hint": "Gemini 模式下生效。只有在此列表中的用户，在指令中输入 2K/4K 时才会自动转为分辨率参数。不在列表中的用户输入 2K/4K 将作为普通文本传入 prompt。留空则所有用户都不允许通过指令指定分辨率。",
+        "items": { "type": "string", "description": "用户QQ号" },
+        "default": []
+    },
     "user_whitelist": {
         "description": "【权限】用户白名单",
         "type": "list",
