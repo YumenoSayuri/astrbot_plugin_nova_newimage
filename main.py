@@ -25,7 +25,7 @@ from astrbot.core.provider import Provider
     "astrbot_plugin_newimage",
     "辉宝",
     "AI生图插件：支持Gemini原生API与OpenAI兼容双路由，图生图/文生图/自定义Prompt，含安全过滤、高分辨率白名单与签到系统",
-    "1.4.0",
+    "1.4.1",
     "https://github.com/YumenoSayuri/astrbot_plugin_nova_newimage",
 )
 class FigurineProPlugin(Star):
@@ -283,6 +283,9 @@ class FigurineProPlugin(Star):
         extracted_size = None  # 用户指定的分辨率参数
         if cmd == bnn_command:
             user_prompt = text.removeprefix(cmd).strip()
+            # 清除 @ 文本残留
+            user_prompt = re.sub(r'@\S+?\(\d+\)', '', user_prompt).strip()
+            user_prompt = re.sub(r'@\S+', '', user_prompt).strip()
             is_bnn = True
             if not user_prompt: return
             # 从 bnn 的自定义 prompt 中提取分辨率（仅白名单用户）
@@ -291,6 +294,9 @@ class FigurineProPlugin(Star):
         elif cmd in self.prompt_map:
             preset_prompt = self.prompt_map.get(cmd)
             extra_text = text.removeprefix(cmd).strip()
+            # 清除 @ 文本残留（如 "@昵称(123456)"），避免被当成补充 prompt 传给 API
+            extra_text = re.sub(r'@\S+?\(\d+\)', '', extra_text).strip()
+            extra_text = re.sub(r'@\S+', '', extra_text).strip()
             if extra_text:
                 # 从用户补充文本中提取分辨率（仅白名单用户）
                 extra_text, extracted_size = self._extract_image_size(extra_text, sender_id)

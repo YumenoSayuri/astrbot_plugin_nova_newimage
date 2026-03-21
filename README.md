@@ -184,6 +184,9 @@
 
 ## 📝 更新日志
 
+### v1.4.1 (2026-03-22)
+- 🐛 **修复**：修复使用 `@用户 + 预设指令` 时，`@昵称(QQ号)` 文本残留被当成补充 prompt 传给 API 的 Bug。现在会在 prompt 构建前自动清除 @ 提及文本，确保只有真正的用户补充内容才会作为附加指令传入。同时适用于 bnn 自定义模式。
+
 ### v1.4.0 (2026-03-21)
 - 🚀 **重大新功能**：新增 **Gemini 原生 API 双路由** 支持！通过 `is_gemini_api` 开关一键切换 Gemini 原生格式（`generateContent`）与 OpenAI 兼容格式（`/v1/chat/completions`）。支持自定义域名反代的 Gemini 接口。
 - 🛡️ **安全过滤**：Gemini 模式下新增 `safety_level` 配置，支持 `BLOCK_NONE`/`BLOCK_ONLY_HIGH`/`BLOCK_MEDIUM_AND_ABOVE`/`BLOCK_LOW_AND_ABOVE` 四种等级，可突破默认安全限制。被拦截时会给出明确提示。
