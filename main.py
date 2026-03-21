@@ -370,8 +370,9 @@ class FigurineProPlugin(Star):
                 return
             images_to_process = [img_bytes_list[0]]
             
-            # 处理预设+补充的显示逻辑
-            full_cmd_text = text.strip()
+            # 处理预设+补充的显示逻辑（清除 @ 文本避免显示中出现 @昵称）
+            full_cmd_text = re.sub(r'@\S+?\(\d+\)', '', text).strip()
+            full_cmd_text = re.sub(r'@\S+', '', full_cmd_text).strip()
             display_cmd = full_cmd_text[:30] + '...' if len(full_cmd_text) > 30 else full_cmd_text
             initial_messages.append(f"🎨 收到请求，正在生成 [{display_cmd}]...")
 
